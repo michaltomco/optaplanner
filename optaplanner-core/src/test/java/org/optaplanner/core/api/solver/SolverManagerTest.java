@@ -16,6 +16,8 @@
 
 package org.optaplanner.core.api.solver;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.concurrent.BrokenBarrierException;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.CyclicBarrier;
@@ -37,8 +39,10 @@ import org.optaplanner.core.impl.testdata.domain.TestdataSolution;
 import org.optaplanner.core.impl.testdata.domain.extended.TestdataUnannotatedExtendedSolution;
 import org.optaplanner.core.impl.testdata.util.PlannerTestUtils;
 
-import static org.junit.Assert.*;
-import static org.optaplanner.core.impl.testdata.util.PlannerAssert.*;
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.fail;
+import static org.optaplanner.core.impl.testdata.util.PlannerAssert.assertSolutionInitialized;
 
 public class SolverManagerTest {
 
@@ -240,4 +244,36 @@ public class SolverManagerTest {
         assertTrue(eventCount.get() < 4);
     }
 
+    /**
+     * Runs solver with double the process count than there are CPUs.
+     */
+    @Test(timeout = 600_000)
+    public void moreProblemsThanCpus() throws ExecutionException, InterruptedException {
+        int processCount = Runtime.getRuntime().availableProcessors() * 2;
+
+        SolverManagerConfig config = new SolverManagerConfig()
+                .withParallelSolverCount(String.valueOf(processCount));
+
+        CyclicBarrier barrier = new CyclicBarrier(processCount);
+        final SolverConfig solverConfig = PlannerTestUtils.buildSolverConfig(TestdataSolution.class, TestdataEntity.class)
+                .withPhases(new CustomPhaseConfig().withCustomPhaseCommands(
+                        scoreDirector -> {
+                            try {
+                                barrier.await();
+                            } catch (InterruptedException | BrokenBarrierException e) {
+                                fail("Cyclic barrier failed.");
+                            }
+                        }), new ConstructionHeuristicPhaseConfig());
+
+        SolverManager<TestdataSolution, Long> solverManager = SolverManager.create(solverConfig, config);
+
+        List<SolverJob<TestdataSolution, Long>> jobs = new ArrayList<>();
+        for (long i = 0; i < processCount; i++) {
+            jobs.add(solverManager.solve(i, PlannerTestUtils.generateTestdataSolution("s" + i)));
+        }
+
+        for (SolverJob<TestdataSolution, Long> job : jobs) {
+            assertSolutionInitialized(job.getFinalBestSolution());
+        }
+    }
 }
