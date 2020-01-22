@@ -276,4 +276,44 @@ public class SolverManagerTest {
             assertSolutionInitialized(job.getFinalBestSolution());
         }
     }
+
+    /**
+     * Runs solver with double the process count than there are CPUs using a consumer.
+     */
+    @Test(timeout = 600_000)
+    public void moreProblemsThanCpusUsingBestSolutionConsumer() throws ExecutionException, InterruptedException {
+        int processCount = Runtime.getRuntime().availableProcessors() * 2;
+
+        SolverManagerConfig config = new SolverManagerConfig()
+                .withParallelSolverCount(String.valueOf(processCount));
+
+        CyclicBarrier barrier = new CyclicBarrier(processCount);
+        final SolverConfig solverConfig = PlannerTestUtils.buildSolverConfig(TestdataSolution.class, TestdataEntity.class)
+                .withPhases(new CustomPhaseConfig().withCustomPhaseCommands(
+                        scoreDirector -> {
+                            try {
+                                barrier.await();
+                            } catch (InterruptedException | BrokenBarrierException e) {
+                                fail("Cyclic barrier failed.");
+                            }
+                        }), new ConstructionHeuristicPhaseConfig());
+
+        SolverManager<TestdataSolution, Long> solverManager = SolverManager.create(solverConfig, config);
+
+        List<SolverJob<TestdataSolution, Long>> jobs = new ArrayList<>();
+        List<Consumer<TestdataSolution>> results = new ArrayList<>();
+        for (long i = 0; i < processCount; i++) {
+            long finalI = i;
+            Consumer<TestdataSolution> bestResult = testdataSolution -> {};
+            jobs.add(solverManager.solveAndListen(finalI,
+                                                  plannerId -> PlannerTestUtils.generateTestdataSolution("s" + finalI),
+                                                  bestResult
+            ));
+            results.add(bestResult);
+        }
+
+        for (SolverJob<TestdataSolution, Long> job : jobs) {
+            assertSolutionInitialized(job.getFinalBestSolution());
+        }
+    }
 }
