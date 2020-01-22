@@ -16,6 +16,8 @@
 
 package org.optaplanner.core.api.solver;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.concurrent.BrokenBarrierException;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.CyclicBarrier;
@@ -240,4 +242,30 @@ public class SolverManagerTest {
         assertTrue(eventCount.get() < 4);
     }
 
+    @Test(timeout = 600_000)
+    public void multipleThreadInSolverConfigWithSolverManager() throws ExecutionException, InterruptedException {
+        int processCount = Runtime.getRuntime().availableProcessors() * 10;
+        CyclicBarrier barrier = new CyclicBarrier(processCount);
+        final SolverConfig solverConfig = PlannerTestUtils.buildSolverConfig(TestdataSolution.class, TestdataEntity.class)
+                .withPhases(new CustomPhaseConfig().withCustomPhaseCommands(
+                        scoreDirector -> {
+                            try {
+                                barrier.await();
+                            } catch (InterruptedException | BrokenBarrierException e) {
+                                fail("Cyclic barrier failed.");
+                            }
+                        }), new ConstructionHeuristicPhaseConfig())
+                .withMoveThreadCount(String.valueOf(processCount));
+        SolverManager<TestdataSolution, Long> solverManager = SolverManager.create(
+                solverConfig, new SolverManagerConfig().withParallelSolverCount(String.valueOf(processCount)));
+
+        List<SolverJob<TestdataSolution, Long>> jobs = new ArrayList<>();
+        for (long i = 0; i < processCount; i++) {
+            jobs.add(solverManager.solve(i, PlannerTestUtils.generateTestdataSolution("s"+i)));
+        }
+
+        for (SolverJob<TestdataSolution, Long> job : jobs) {
+            assertSolutionInitialized(job.getFinalBestSolution());
+        }
+    }
 }
