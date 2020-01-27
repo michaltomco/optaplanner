@@ -244,7 +244,7 @@ public class SolverManagerTest {
 
     @Test(timeout = 600_000)
     public void multipleThreadInSolverConfigWithSolverManager() throws ExecutionException, InterruptedException {
-        int processCount = Runtime.getRuntime().availableProcessors() * 10;
+        int processCount = Runtime.getRuntime().availableProcessors() * 2;
         CyclicBarrier barrier = new CyclicBarrier(processCount);
         final SolverConfig solverConfig = PlannerTestUtils.buildSolverConfig(TestdataSolution.class, TestdataEntity.class)
                 .withPhases(new CustomPhaseConfig().withCustomPhaseCommands(
