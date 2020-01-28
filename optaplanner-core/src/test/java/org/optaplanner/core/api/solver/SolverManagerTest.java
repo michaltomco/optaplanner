@@ -39,6 +39,7 @@ import org.optaplanner.core.impl.testdata.domain.TestdataSolution;
 import org.optaplanner.core.impl.testdata.domain.extended.TestdataUnannotatedExtendedSolution;
 import org.optaplanner.core.impl.testdata.util.PlannerTestUtils;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
@@ -244,76 +245,95 @@ public class SolverManagerTest {
         assertTrue(eventCount.get() < 4);
     }
 
-    /**
-     * Runs solver with double the process count than there are CPUs.
-     */
     @Test(timeout = 600_000)
-    public void moreProblemsThanCpus() throws ExecutionException, InterruptedException {
-        int processCount = Runtime.getRuntime().availableProcessors() * 2;
+    public void moreProblemsThanCpus() throws InterruptedException, ExecutionException {
+        // Use twice the amount of processes than available processors.
+        int problemCount = Runtime.getRuntime().availableProcessors() * 2;
+        CountDownLatch bestSolutionLatch = new CountDownLatch(problemCount);
 
-        SolverManagerConfig config = new SolverManagerConfig()
-                .withParallelSolverCount(String.valueOf(processCount));
+        SolverManager<TestdataSolution, Integer> solverManager = createConsumerTestableSolverManager(problemCount, bestSolutionLatch);
 
-        CyclicBarrier barrier = new CyclicBarrier(processCount);
+        assertSolveWithoutConsumer(problemCount, bestSolutionLatch, solverManager);
+        assertSolveWithBestSolutionConsumer(problemCount, solverManager);
+        assertSolveWithFinalBestSolutionConsumer(problemCount, solverManager);
+    }
+
+    private SolverManager<TestdataSolution, Integer> createConsumerTestableSolverManager(int processCount, CountDownLatch bestSolutionLatch) {
         final SolverConfig solverConfig = PlannerTestUtils.buildSolverConfig(TestdataSolution.class, TestdataEntity.class)
                 .withPhases(new CustomPhaseConfig().withCustomPhaseCommands(
-                        scoreDirector -> {
-                            try {
-                                barrier.await();
-                            } catch (InterruptedException | BrokenBarrierException e) {
-                                fail("Cyclic barrier failed.");
-                            }
-                        }), new ConstructionHeuristicPhaseConfig());
+                        (ScoreDirector<TestdataSolution> scoreDirector) -> {
+                            TestdataSolution solution = scoreDirector.getWorkingSolution();
+                            TestdataEntity entity = solution.getEntityList().get(0);
+                            scoreDirector.beforeVariableChanged(entity, "value");
+                            entity.setValue(solution.getValueList().get(0));
+                            scoreDirector.afterVariableChanged(entity, "value");
+                            scoreDirector.triggerVariableListeners();
+                        }), new CustomPhaseConfig().withCustomPhaseCommands(
+                        (ScoreDirector<TestdataSolution> scoreDirector) -> {
+                            TestdataSolution solution = scoreDirector.getWorkingSolution();
+                            TestdataEntity entity = solution.getEntityList().get(1);
+                            scoreDirector.beforeVariableChanged(entity, "value");
+                            entity.setValue(solution.getValueList().get(1));
+                            scoreDirector.afterVariableChanged(entity, "value");
+                            scoreDirector.triggerVariableListeners();
+                        }), new CustomPhaseConfig().withCustomPhaseCommands(
+                        (ScoreDirector<TestdataSolution> scoreDirector) -> bestSolutionLatch.countDown()));
 
-        SolverManager<TestdataSolution, Long> solverManager = SolverManager.create(solverConfig, config);
+        SolverManagerConfig solverManagerConfig = new SolverManagerConfig().withParallelSolverCount(String.valueOf(processCount));
 
-        List<SolverJob<TestdataSolution, Long>> jobs = new ArrayList<>();
-        for (long i = 0; i < processCount; i++) {
-            jobs.add(solverManager.solve(i, PlannerTestUtils.generateTestdataSolution("s" + i)));
+        return SolverManager.create(solverConfig, solverManagerConfig);
+    }
+
+    private void assertSolveWithoutConsumer(int processCount, CountDownLatch bestSolutionLatch, SolverManager<TestdataSolution, Integer> solverManager) throws InterruptedException, ExecutionException {
+        List<SolverJob<TestdataSolution, Integer>> jobs = new ArrayList<>(processCount);
+
+        for (int id = 0; id < processCount; id++) {
+            jobs.add(solverManager.solve(id, PlannerTestUtils.generateTestdataSolution("s" + id, 2)));
         }
+        bestSolutionLatch.await();
 
-        for (SolverJob<TestdataSolution, Long> job : jobs) {
+        for (SolverJob<TestdataSolution, Integer> job : jobs) {
             assertSolutionInitialized(job.getFinalBestSolution());
         }
     }
 
-    /**
-     * Runs solver with double the process count than there are CPUs using a consumer.
-     */
-    @Test(timeout = 600_000)
-    public void moreProblemsThanCpusUsingBestSolutionConsumer() throws ExecutionException, InterruptedException {
-        int processCount = Runtime.getRuntime().availableProcessors() * 2;
+    private void assertSolveWithBestSolutionConsumer(int processCount, SolverManager<TestdataSolution, Integer> solverManager) throws InterruptedException {
+        int bestSolutionEventTriggeredCountExpected = processCount * 2;
+        CountDownLatch bestSolutionConsumerLatch = new CountDownLatch(bestSolutionEventTriggeredCountExpected);
 
-        SolverManagerConfig config = new SolverManagerConfig()
-                .withParallelSolverCount(String.valueOf(processCount));
-
-        CyclicBarrier barrier = new CyclicBarrier(processCount);
-        final SolverConfig solverConfig = PlannerTestUtils.buildSolverConfig(TestdataSolution.class, TestdataEntity.class)
-                .withPhases(new CustomPhaseConfig().withCustomPhaseCommands(
-                        scoreDirector -> {
-                            try {
-                                barrier.await();
-                            } catch (InterruptedException | BrokenBarrierException e) {
-                                fail("Cyclic barrier failed.");
-                            }
-                        }), new ConstructionHeuristicPhaseConfig());
-
-        SolverManager<TestdataSolution, Long> solverManager = SolverManager.create(solverConfig, config);
-
-        List<SolverJob<TestdataSolution, Long>> jobs = new ArrayList<>();
-        List<Consumer<TestdataSolution>> results = new ArrayList<>();
-        for (long i = 0; i < processCount; i++) {
-            long finalI = i;
-            Consumer<TestdataSolution> bestResult = testdataSolution -> {};
-            jobs.add(solverManager.solveAndListen(finalI,
-                                                  plannerId -> PlannerTestUtils.generateTestdataSolution("s" + finalI),
-                                                  bestResult
-            ));
-            results.add(bestResult);
+        AtomicInteger bestSolutionEventTriggerCount = new AtomicInteger();
+        Consumer<TestdataSolution> bestSolutionConsumer = bestSolution -> {
+            bestSolutionEventTriggerCount.incrementAndGet();
+            bestSolutionConsumerLatch.countDown();
+        };
+        for (int id = 0; id < processCount; id++) {
+            solverManager.solveAndListen(
+                    id,
+                    problemId -> PlannerTestUtils.generateTestdataSolution("s" + problemId, 2),
+                    bestSolutionConsumer, null);
         }
+        bestSolutionConsumerLatch.await();
 
-        for (SolverJob<TestdataSolution, Long> job : jobs) {
-            assertSolutionInitialized(job.getFinalBestSolution());
+        assertThat(bestSolutionEventTriggerCount.intValue()).isSameAs(bestSolutionEventTriggeredCountExpected);
+    }
+
+    private void assertSolveWithFinalBestSolutionConsumer(int processCount, SolverManager<TestdataSolution, Integer> solverManager) throws InterruptedException {
+        int finalBestSolutionEventTriggeredCountExpected = processCount;
+        CountDownLatch finalBestSolutionConsumerLatch = new CountDownLatch(finalBestSolutionEventTriggeredCountExpected);
+
+        AtomicInteger finalBestSolutionEventTriggerCount = new AtomicInteger();
+        Consumer<TestdataSolution> finalBestSolutionConsumer = finalBestSolution -> {
+            finalBestSolutionEventTriggerCount.incrementAndGet();
+            finalBestSolutionConsumerLatch.countDown();
+        };
+        for (int id = 0; id < processCount; id++) {
+            solverManager.solve(
+                    id,
+                    problemId -> PlannerTestUtils.generateTestdataSolution("s" + problemId, 2),
+                    finalBestSolutionConsumer, null);
         }
+        finalBestSolutionConsumerLatch.await();
+
+        assertThat(finalBestSolutionEventTriggerCount.intValue()).isSameAs(finalBestSolutionEventTriggeredCountExpected);
     }
 }
