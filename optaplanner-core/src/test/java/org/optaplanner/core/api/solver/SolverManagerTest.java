@@ -249,16 +249,15 @@ public class SolverManagerTest {
     public void moreProblemsThanCpus() throws InterruptedException, ExecutionException {
         // Use twice the amount of processes than available processors.
         int problemCount = Runtime.getRuntime().availableProcessors() * 2;
-        CountDownLatch bestSolutionLatch = new CountDownLatch(problemCount);
 
-        SolverManager<TestdataSolution, Integer> solverManager = createConsumerTestableSolverManager(problemCount, bestSolutionLatch);
+        SolverManager<TestdataSolution, Integer> solverManager = createConsumerTestableSolverManager(problemCount);
 
-        assertSolveWithoutConsumer(problemCount, bestSolutionLatch, solverManager);
+        assertSolveWithoutConsumer(problemCount, solverManager);
         assertSolveWithBestSolutionConsumer(problemCount, solverManager);
         assertSolveWithFinalBestSolutionConsumer(problemCount, solverManager);
     }
 
-    private SolverManager<TestdataSolution, Integer> createConsumerTestableSolverManager(int processCount, CountDownLatch bestSolutionLatch) {
+    private SolverManager<TestdataSolution, Integer> createConsumerTestableSolverManager(int processCount) {
         final SolverConfig solverConfig = PlannerTestUtils.buildSolverConfig(TestdataSolution.class, TestdataEntity.class)
                 .withPhases(new CustomPhaseConfig().withCustomPhaseCommands(
                         (ScoreDirector<TestdataSolution> scoreDirector) -> {
@@ -276,21 +275,19 @@ public class SolverManagerTest {
                             entity.setValue(solution.getValueList().get(1));
                             scoreDirector.afterVariableChanged(entity, "value");
                             scoreDirector.triggerVariableListeners();
-                        }), new CustomPhaseConfig().withCustomPhaseCommands(
-                        (ScoreDirector<TestdataSolution> scoreDirector) -> bestSolutionLatch.countDown()));
+                        }));
 
         SolverManagerConfig solverManagerConfig = new SolverManagerConfig().withParallelSolverCount(String.valueOf(processCount));
 
         return SolverManager.create(solverConfig, solverManagerConfig);
     }
 
-    private void assertSolveWithoutConsumer(int processCount, CountDownLatch bestSolutionLatch, SolverManager<TestdataSolution, Integer> solverManager) throws InterruptedException, ExecutionException {
+    private void assertSolveWithoutConsumer(int processCount, SolverManager<TestdataSolution, Integer> solverManager) throws InterruptedException, ExecutionException {
         List<SolverJob<TestdataSolution, Integer>> jobs = new ArrayList<>(processCount);
 
         for (int id = 0; id < processCount; id++) {
             jobs.add(solverManager.solve(id, PlannerTestUtils.generateTestdataSolution("s" + id, 2)));
         }
-        bestSolutionLatch.await();
 
         for (SolverJob<TestdataSolution, Integer> job : jobs) {
             assertSolutionInitialized(job.getFinalBestSolution());
