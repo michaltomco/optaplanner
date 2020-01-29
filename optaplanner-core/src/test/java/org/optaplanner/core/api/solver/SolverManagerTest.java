@@ -250,14 +250,14 @@ public class SolverManagerTest {
         // Use twice the amount of processes than available processors.
         int problemCount = Runtime.getRuntime().availableProcessors() * 2;
 
-        SolverManager<TestdataSolution, Integer> solverManager = createConsumerTestableSolverManager(problemCount);
+        SolverManager<TestdataSolution, Integer> solverManager = createSolverManagerTestableByDifferentConsumers(problemCount);
 
         assertSolveWithoutConsumer(problemCount, solverManager);
         assertSolveWithBestSolutionConsumer(problemCount, solverManager);
         assertSolveWithFinalBestSolutionConsumer(problemCount, solverManager);
     }
 
-    private SolverManager<TestdataSolution, Integer> createConsumerTestableSolverManager(int processCount) {
+    private SolverManager<TestdataSolution, Integer> createSolverManagerTestableByDifferentConsumers(int processCount) {
         final SolverConfig solverConfig = PlannerTestUtils.buildSolverConfig(TestdataSolution.class, TestdataEntity.class)
                 .withPhases(new CustomPhaseConfig().withCustomPhaseCommands(
                         (ScoreDirector<TestdataSolution> scoreDirector) -> {
