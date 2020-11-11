@@ -33,6 +33,7 @@ import java.util.stream.IntStream;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
+import org.junit.jupiter.api.Disabled;
 import org.optaplanner.core.api.solver.Solver;
 import org.optaplanner.core.api.solver.SolverFactory;
 import org.optaplanner.core.config.constructionheuristic.ConstructionHeuristicPhaseConfig;
@@ -165,6 +166,7 @@ public class DefaultPartitionedSearchPhaseTest {
         assertThat(solutionFuture.get()).isNotNull();
     }
 
+    @Disabled("PLANNER-2249")
     @Test
     @Timeout(5)
     public void shutdownMainThreadAbruptly() throws InterruptedException {
