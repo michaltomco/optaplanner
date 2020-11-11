@@ -26,8 +26,12 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.function.Function;
+import java.util.function.Predicate;
+import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
 import org.drools.model.Model;
+import org.drools.model.functions.accumulate.GroupKey;
 import org.drools.model.impl.ModelImpl;
 import org.drools.modelcompiler.builder.KieBaseBuilder;
 import org.kie.api.KieBase;
@@ -37,17 +41,19 @@ import org.kie.internal.event.rule.RuleEventManager;
 import org.optaplanner.core.api.score.Score;
 import org.optaplanner.core.api.score.stream.Constraint;
 import org.optaplanner.core.impl.domain.solution.descriptor.SolutionDescriptor;
+import org.optaplanner.core.impl.score.definition.ScoreDefinition;
 import org.optaplanner.core.impl.score.director.drools.DroolsScoreDirector;
 import org.optaplanner.core.impl.score.director.drools.OptaPlannerRuleEventListener;
 import org.optaplanner.core.impl.score.holder.AbstractScoreHolder;
 import org.optaplanner.core.impl.score.stream.ConstraintSession;
-import org.optaplanner.core.impl.score.stream.common.AbstractConstraintSessionFactory;
+import org.optaplanner.core.impl.score.stream.ConstraintSessionFactory;
 import org.optaplanner.core.impl.score.stream.drools.common.FactTuple;
 import org.optaplanner.core.impl.score.stream.drools.common.rules.RuleAssembly;
 
-public class DroolsConstraintSessionFactory<Solution_, Score_ extends Score<Score_>>
-        extends AbstractConstraintSessionFactory<Solution_, Score_> {
+public final class DroolsConstraintSessionFactory<Solution_, Score_ extends Score<Score_>>
+        implements ConstraintSessionFactory<Solution_, Score_> {
 
+    private final SolutionDescriptor<Solution_> solutionDescriptor;
     private final Model originalModel;
     private final KieBase originalKieBase;
     private final Map<Rule, DroolsConstraint<Solution_>> compiledRuleToConstraintMap;
@@ -59,7 +65,7 @@ public class DroolsConstraintSessionFactory<Solution_, Score_ extends Score<Scor
     public DroolsConstraintSessionFactory(SolutionDescriptor<Solution_> solutionDescriptor, Model model,
             Map<org.drools.model.Rule, Class[]> modelRuleToExpectedTypesMap,
             DroolsConstraint<Solution_>... constraints) {
-        super(solutionDescriptor);
+        this.solutionDescriptor = solutionDescriptor;
         this.originalModel = model;
         this.originalKieBase = KieBaseBuilder.createKieBaseFromModel(model);
         this.currentKieBase = originalKieBase;
@@ -99,23 +105,24 @@ public class DroolsConstraintSessionFactory<Solution_, Score_ extends Score<Scor
      * @return never null
      */
     private static List<Object> matchJustificationsToOutput(List<Object> justificationList, int expectedCount,
-            Class... expectedTypes) {
+            Class<?>... expectedTypes) {
         if (expectedTypes.length == 0) {
             throw new IllegalStateException("Impossible: there are no 0-cardinality constraint streams.");
         }
+        List<Object> ungroupedJustificationList = ungroupJustifications(justificationList);
         Object[] matching = new Object[expectedTypes.length];
         // First process non-Object matches, as those are the most descriptive.
         for (int i = 0; i < expectedTypes.length; i++) {
-            Class expectedType = expectedTypes[i];
+            Class<?> expectedType = expectedTypes[i];
             if (Objects.equals(expectedType, Object.class)) {
                 continue;
             }
-            Object match = justificationList.stream()
+            Object match = ungroupedJustificationList.stream()
                     .filter(j -> expectedType.isAssignableFrom(j.getClass()))
                     .findFirst()
                     .orElseThrow(() -> new IllegalStateException("Impossible: no justification of type ("
                             + expectedType + ")."));
-            justificationList.remove(match);
+            ungroupedJustificationList.remove(match);
             matching[i] = match;
         }
         // Fill the remaining places with Object matches, but keep their original order coming from expectedMatches.
@@ -123,10 +130,10 @@ public class DroolsConstraintSessionFactory<Solution_, Score_ extends Score<Scor
             if (matching[i] != null) {
                 continue;
             }
-            Object match = justificationList.stream()
+            Object match = ungroupedJustificationList.stream()
                     .findFirst()
                     .orElseThrow(() -> new IllegalStateException("Impossible: there are no more constraint matches."));
-            justificationList.remove(match);
+            ungroupedJustificationList.remove(match);
             matching[i] = match;
         }
         if (matching.length > 1) {
@@ -134,7 +141,7 @@ public class DroolsConstraintSessionFactory<Solution_, Score_ extends Score<Scor
             return Arrays.asList(matching);
         }
         Object item = matching[0];
-        Class expectedType = expectedTypes[0];
+        Class<?> expectedType = expectedTypes[0];
         if (FactTuple.class.isAssignableFrom(expectedType) || item instanceof FactTuple) {
             /*
              * The justifications will all come from a single tuple (eg. BiTuple<A, B>).
@@ -150,10 +157,38 @@ public class DroolsConstraintSessionFactory<Solution_, Score_ extends Score<Scor
         }
     }
 
+    private static List<Object> ungroupJustifications(List<Object> justificationList) {
+        // Send all groupKey instances to the beginning of the justification list as we can not rely on Drools putting
+        // them there for us.
+        Predicate<Object> isGroupKey = o -> o instanceof GroupKey;
+        Stream<Object> groupKeyValues = justificationList.stream()
+                .filter(isGroupKey)
+                .flatMap(groupKey -> {
+                    Object ungrouped = ((GroupKey) groupKey).getKey();
+                    if (ungrouped instanceof FactTuple) {
+                        FactTuple factTuple = (FactTuple) ungrouped;
+                        return factTuple.asList().stream();
+                    }
+                    return Stream.of(ungrouped);
+                });
+        Stream<Object> otherValues = justificationList.stream()
+                .filter(o -> !isGroupKey.test(o))
+                .flatMap(o -> {
+                    if (o instanceof Object[]) { // Double accumulates return results as arrays of two objects.
+                        return Arrays.stream((Object[]) o);
+                    } else {
+                        return Stream.of(o);
+                    }
+                });
+        return Stream.concat(groupKeyValues, otherValues)
+                .collect(Collectors.toList());
+    }
+
     @Override
     public ConstraintSession<Solution_, Score_> buildSession(boolean constraintMatchEnabled, Solution_ workingSolution) {
+        ScoreDefinition<Score_> scoreDefinition = solutionDescriptor.getScoreDefinition();
         // Make sure the constraint justifications match what comes out of Bavet.
-        AbstractScoreHolder<Score_> scoreHolder = getScoreDefinition().buildScoreHolder(constraintMatchEnabled);
+        AbstractScoreHolder<Score_> scoreHolder = scoreDefinition.buildScoreHolder(constraintMatchEnabled);
         scoreHolder.setJustificationListConverter(
                 (justificationList, rule) -> {
                     DroolsConstraint<Solution_> constraint = compiledRuleToConstraintMap.get(rule);
@@ -162,7 +197,7 @@ public class DroolsConstraintSessionFactory<Solution_, Score_ extends Score<Scor
                             constraint.getConsequence().getTerminalNode().getCardinality(), expectedTypes);
                 });
         // Determine which rules to enable based on the fact that their constraints carry weight.
-        Score_ zeroScore = getScoreDefinition().getZeroScore();
+        Score_ zeroScore = scoreDefinition.getZeroScore();
         Set<String> disabledConstraintIdSet = new LinkedHashSet<>(0);
         compiledRuleToConstraintMap.forEach((compiledRule, constraint) -> {
             Score_ constraintWeight = (Score_) constraint.extractConstraintWeight(workingSolution);
@@ -191,7 +226,7 @@ public class DroolsConstraintSessionFactory<Solution_, Score_ extends Score<Scor
         KieSession kieSession = currentKieBase.newKieSession();
         ((RuleEventManager) kieSession).addEventListener(new OptaPlannerRuleEventListener()); // Enables undo in rules.
         kieSession.setGlobal(DroolsScoreDirector.GLOBAL_SCORE_HOLDER_KEY, scoreHolder);
-        return new DroolsConstraintSession<>(kieSession, scoreHolder);
+        return new DroolsConstraintSession<>(solutionDescriptor, kieSession, scoreHolder);
     }
 
 }

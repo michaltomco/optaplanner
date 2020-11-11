@@ -34,13 +34,40 @@
   </licenses>
 
   <properties>
-    <!-- override the default GroupId:ArtifactId to map both master branch and 7.x branches to the same SonarCloud project -->
-    <sonar.projectKey>org.optaplanner:optaplanner</sonar.projectKey>
+    <!-- The property sonar.projectKey is defined in the CI in order not to collide with optawebs. It overrides
+         the default GroupId:ArtifactId to map both master branch and 7.x branches to the same SonarCloud project.
+         As the sonar.moduleKey inherits the value of sonar.projectKey by default, we have to override it too. -->
     <sonar.moduleKey>${project.groupId}:${project.artifactId}</sonar.moduleKey>
   </properties>
 
+  <distributionManagement>
+    <repository>
+      <id>jboss-releases-repository</id>
+      <name>JBoss Releases Repository</name>
+      <url>https://repository.jboss.org/nexus/service/local/staging/deploy/maven2/</url>
+    </repository>
+    <snapshotRepository>
+      <id>jboss-snapshots-repository</id>
+      <name>JBoss Snapshot Repository</name>
+      <url>https://repository.jboss.org/nexus/content/repositories/snapshots/</url>
+    </snapshotRepository>
+  </distributionManagement>
+
   <repositories>
     <repository>
+      <id>jboss-public-repository-group</id>
+      <url>https://repository.jboss.org/nexus/content/groups/public/</url>
+      <releases>
+        <!-- Get releases only from Maven Central which is faster. -->
+        <enabled>false</enabled>
+      </releases>
+      <snapshots>
+        <enabled>true</enabled>
+      </snapshots>
+    </repository>
+  </repositories>
+  <pluginRepositories>
+    <pluginRepository>
       <id>jboss-public-repository-group</id>
       <name>JBoss Public Repository Group</name>
       <url>https://repository.jboss.org/nexus/content/groups/public/</url>
@@ -54,8 +81,8 @@
         <enabled>true</enabled>
         <updatePolicy>daily</updatePolicy>
       </snapshots>
-    </repository>
-  </repositories>
+    </pluginRepository>
+  </pluginRepositories>
 
   <scm>
     <connection>scm:git:git@github.com:kiegroup/optaplanner.git</connection>
@@ -88,7 +115,8 @@
 
   <modules>
     <module>optaplanner-bom</module>
-    <module>optaplanner-build-parent</module>
+    <module>build/optaplanner-ide-config</module>
+    <module>build/optaplanner-build-parent</module>
     <module>optaplanner-core</module>
     <module>optaplanner-persistence</module>
     <module>optaplanner-benchmark</module>
